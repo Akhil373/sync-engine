@@ -49,7 +49,6 @@ def create_session(
     base_local_hash: str,
     base_remote_hash: str,
 ) -> None:
-    local_path = str(local_path)
     conn = get_connection()
 
     try:
@@ -65,15 +64,53 @@ def create_session(
                 updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?)
+
+            ON CONFLICT(local_path) DO UPDATE SET
+                remote_path = excluded.remote_path,
+                remote_id = excluded.remote_id,
+                base_local_hash = excluded.base_local_hash,
+                base_remote_hash = excluded.base_remote_hash,
+                state = excluded.state,
+                updated_at = excluded.updated_at
             """,
             (
-                local_path,
+                str(local_path),
                 remote_path,
                 remote_item_id,
                 base_local_hash,
                 base_remote_hash,
                 "active",
                 datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+        conn.commit()
+    finally:
+        close_connection(conn)
+
+
+def update_baseline(
+    local_path: str,
+    base_local_hash: str,
+    base_remote_hash: str,
+) -> None:
+    conn = get_connection()
+
+    try:
+        conn.execute(
+            """
+            UPDATE files
+            SET
+                base_local_hash = ?,
+                base_remote_hash = ?,
+                updated_at = ?
+            WHERE local_path = ?
+            """,
+            (
+                base_local_hash,
+                base_remote_hash,
+                datetime.now(timezone.utc).isoformat(),
+                local_path,
             ),
         )
 
