@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import os
+import signal
 import time
 from . import rclone, state
 import subprocess
@@ -56,50 +57,82 @@ def poll_session(local_path: Path, remote_path: str, idle_timeout=1800) -> None:
     previous_remote_hash, debounce_count = None, 0
     last_activity = time.monotonic()
 
-    while True:
-        session = state.get_session(str(local_path))
+    def handle_signal(signum, frame):
+        raise KeyboardInterrupt
 
-        if session is None or time.monotonic() - last_activity > idle_timeout:
-            return
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
 
-        try:
-            local_hash = file_hash(local_path)
-            remote_hash, _ = get_remote_metadata(remote_path)
-        except Exception:
-            time.sleep(POLL_INTERVAL)
-            continue
+    try:
+        while True:
+            session = state.get_session(str(local_path))
 
-        base_local_hash, base_remomte_hash = (
-            session["base_local_hash"],
-            session["base_remote_hash"],
-        )
+            if session is None or time.monotonic() - last_activity > idle_timeout:
+                return
 
-        if remote_hash == base_remomte_hash:
-            previous_remote_hash, debounce_count = None, 0
-        else:  # remote != base
-            print()
-            if remote_hash == previous_remote_hash:  # remote changed once (== prev)
-                debounce_count += 1
-            else:  # remote changed multiple times (!= prev)
-                previous_remote_hash, debounce_count = remote_hash, 1
+            try:
+                local_hash = file_hash(local_path)
+                remote_hash, _ = get_remote_metadata(remote_path)
+            except Exception:
+                time.sleep(POLL_INTERVAL)
+                continue
 
-            if debounce_count >= 2:  # remote is stable (didnt change in >=2 polls)
-                if local_hash != base_local_hash:
-                    conflict = local_path.with_name(
-                        f"{local_path.stem}.conflict{local_path.suffix}"
-                    )
-                    rclone.run("copyto", remote_path, str(conflict))
-                    state.update_baseline(str(local_path), base_local_hash, remote_hash)
+            base_local_hash, base_remomte_hash = (
+                session["base_local_hash"],
+                session["base_remote_hash"],
+            )
 
-                else:  # remote changed yet local remains same as base
-                    print("remote changed and is stable, syncing to local")
-                    tmp = local_path.with_name(local_path.name + ".tmp")
-                    rclone.run("copyto", remote_path, str(tmp))
-                    os.replace(tmp, local_path)
-                    state.update_baseline(
-                        str(local_path), file_hash(local_path), remote_hash
-                    )
-
+            if remote_hash == base_remomte_hash:
                 previous_remote_hash, debounce_count = None, 0
-                last_activity = time.monotonic()
-        time.sleep(POLL_INTERVAL)
+            else:  # remote != base
+                print()
+                if remote_hash == previous_remote_hash:  # remote changed once (== prev)
+                    debounce_count += 1
+                else:  # remote changed multiple times (!= prev)
+                    previous_remote_hash, debounce_count = remote_hash, 1
+
+                if debounce_count >= 2:  # remote is stable (didnt change in >=2 polls)
+                    if local_hash != base_local_hash:
+                        conflict = local_path.with_name(
+                            f"{local_path.stem}.conflict{local_path.suffix}"
+                        )
+                        rclone.run("copyto", remote_path, str(conflict))
+                        state.update_baseline(
+                            str(local_path), base_local_hash, remote_hash
+                        )
+
+                    else:  # remote changed yet local remains same as base
+                        print("remote changed and is stable, syncing to local")
+                        tmp = local_path.with_name(local_path.name + ".tmp")
+                        rclone.run("copyto", remote_path, str(tmp))
+                        os.replace(tmp, local_path)
+                        state.update_baseline(
+                            str(local_path), file_hash(local_path), remote_hash
+                        )
+
+                    previous_remote_hash, debounce_count = None, 0
+                    last_activity = time.monotonic()
+            time.sleep(POLL_INTERVAL)
+    finally:
+        print("\nEnsuring clean syncronization...wait")
+        time.sleep(4)
+        final_pull(local_path, remote_path)
+
+
+def final_pull(local_path: str, remote_path: str):
+    try:
+        session = state.get_session(str(local_path))
+        if session is None:
+            return
+        base_remote_hash = session["base_remote_hash"]
+        remote_hash, _ = get_remote_metadata(remote_path)
+
+        if remote_hash == base_remote_hash:
+            return
+        print("remote changes found, syncronizing...")
+        tmp = local_path.with_name(local_path.name + ".tmp")
+        rclone.run("copyto", remote_path, str(tmp))
+        os.replace(tmp, local_path)
+        state.update_baseline(str(local_path), file_hash(local_path), remote_hash)
+    except Exception as e:
+        print(f"Final sync failed: {e}")
