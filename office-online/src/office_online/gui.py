@@ -51,8 +51,6 @@ MAX_LINES = 1000
 SERVER_NAME = f"office-online-gui-{os.getuid()}"
 
 
-
-
 class Bus(QObject):
     log = Signal(str, str)
 
@@ -68,7 +66,6 @@ class QtHandler(logging.Handler):
             self.handleError(record)
 
 
-
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -76,8 +73,8 @@ class MainWindow(QMainWindow):
         self.resize(940, 540)
         self.setAcceptDrops(True)
 
-        self.entries: dict[str, dict] = {}  
-        self.closing = False  
+        self.entries: dict[str, dict] = {}
+        self.closing = False
         self.was_running: set[str] = set()
         self.tray: QSystemTrayIcon | None = None
 
@@ -139,12 +136,11 @@ class MainWindow(QMainWindow):
         self.timer.timeout.connect(self._refresh)
         self.timer.start(250)
 
-
     def setup_tray(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         icon = QIcon.fromTheme(
-            "document-edit",
+            "office-online",
             self.style().standardIcon(QStyle.SP_FileIcon),
         )
         self.setWindowIcon(icon)
@@ -178,7 +174,6 @@ class MainWindow(QMainWindow):
     def notify(self, title: str, body: str = "") -> None:
         if self.tray is not None:
             self.tray.showMessage(title, body, QSystemTrayIcon.Information, 5000)
-
 
     def add_files(self, paths) -> None:
         for p in paths:
@@ -219,7 +214,6 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, e) -> None:
         self.add_files(u.toLocalFile() for u in e.mimeData().urls() if u.isLocalFile())
-
 
     def _current_key(self) -> str | None:
         item = self.list.currentItem()
@@ -280,7 +274,6 @@ class MainWindow(QMainWindow):
         else:
             manager.start_session(Path(key))
 
-
     def request_quit(self) -> None:
         if self.closing:
             return
@@ -295,7 +288,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e) -> None:
         if self.closing:
-            e.ignore() 
+            e.ignore()
             return
         if self.tray is not None:
             e.ignore()
@@ -363,6 +356,7 @@ def main() -> None:
 
     app = QApplication(sys.argv[:1])
     app.setQuitOnLastWindowClosed(False)
+    app.setDesktopFileName("office-online")
 
     if send_to_running_instance(args.files):
         return

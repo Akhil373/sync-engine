@@ -36,6 +36,7 @@ def open_file(local_path: Path, remote_path: str, stop: threading.Event):
 
         log.info("local hash: %s", local_hash)
         log.info("remote hash: %s", remote_hash)
+        log.info("remote id: %s", remote_id)
 
         state.create_session(
             local_path=local_path,
@@ -63,7 +64,7 @@ def file_hash(path):
 
 
 def poll_session(
-    local_path: Path, remote_path: str, stop: threading.Event, idle_timeout=1800
+    local_path: Path, remote_path: str, stop: threading.Event, idle_timeout=7200
 ) -> None:
     previous_remote_hash, debounce_count = None, 0
     last_activity = time.monotonic()
@@ -90,6 +91,7 @@ def poll_session(
         if remote_hash == base_remomte_hash:
             previous_remote_hash, debounce_count = None, 0
         else:  # remote != base
+            log.info("found remote changes")
             if remote_hash == previous_remote_hash:  # remote changed once (== prev)
                 debounce_count += 1
             else:  # remote changed multiple times (!= prev)
