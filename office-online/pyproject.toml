@@ -7,10 +7,13 @@ authors = [
     { name = "Akhil373", email = "akhil2005.m@gmail.com" }
 ]
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pyside6>=6.12.0",
+]
 
 [project.scripts]
 office-online = "office_online.cli:main"
+office-online-gui = "office_online.gui:main"
 
 [build-system]
 requires = ["uv_build>=0.11.1,<0.12.0"]
