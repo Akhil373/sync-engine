@@ -1,41 +1,19 @@
-import subprocess
 import argparse
+import signal
 from pathlib import Path
-import os
 
-from .auth import ensure_authenticated
-from .session import open_file
-from . import rclone
-from . import state
+from . import manager
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        prog="office-online",
-    )
-
-    if not state.get_db_path().exists():
-        state.init_db()
-
+    parser = argparse.ArgumentParser(prog="office-online")
     parser.add_argument("file", type=Path)
-
     args = parser.parse_args()
 
-    ensure_authenticated()
+    manager.init()
 
-    print(f"Opening {args.file}")
+    signal.signal(signal.SIGINT, lambda *_: manager.stop_all())
+    signal.signal(signal.SIGTERM, lambda *_: manager.stop_all())
 
-    file = Path(args.file).resolve()
-
-    ensure_authenticated()
-
-    remote_path = f"onedrive:office-online/{file.name}"
-
-    rclone.copy_to_remote(
-        str(file),
-        remote_path,
-    )
-
-    print(f"Uploaded {file.name}")
-
-    open_file(file, remote_path)
+    manager.start_session(args.file)
+    manager.join_all()

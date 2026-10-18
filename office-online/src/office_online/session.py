@@ -1,12 +1,16 @@
 from pathlib import Path
 import json
+import threading
 import os
 import signal
 import time
 from . import rclone, state
 import subprocess
+from .logger_config import get_logger
 
 POLL_INTERVAL = 5
+
+log = get_logger(__name__)
 
 
 def get_remote_metadata(remote_path: str) -> tuple[str, str]:
@@ -25,98 +29,93 @@ def get_remote_metadata(remote_path: str) -> tuple[str, str]:
     return remote_hash, remote_id
 
 
-def open_file(local_path: Path, remote_path: str):
-    local_hash = rclone.run("hashsum", "quickxor", local_path).stdout.split()[0]
-    remote_hash, remote_id = get_remote_metadata(remote_path)
+def open_file(local_path: Path, remote_path: str, stop: threading.Event):
+    try:
+        local_hash = rclone.run("hashsum", "quickxor", local_path).stdout.split()[0]
+        remote_hash, remote_id = get_remote_metadata(remote_path)
 
-    print("local hash:", local_hash)
-    print("remote id and hash:", remote_id, remote_hash)
+        log.info("local hash: %s", local_hash)
+        log.info("remote hash: %s", remote_hash)
 
-    state.create_session(
-        local_path=local_path,
-        remote_path=remote_path,
-        remote_item_id=remote_id,
-        base_local_hash=local_hash,
-        base_remote_hash=remote_hash,
-    )
+        state.create_session(
+            local_path=local_path,
+            remote_path=remote_path,
+            remote_item_id=remote_id,
+            base_local_hash=local_hash,
+            base_remote_hash=remote_hash,
+        )
 
-    url = rclone.get_edit_url(remote_path)
+        url = rclone.get_edit_url(remote_path)
 
-    print("fetched url:", url[:15])
+        log.info("fetched url: %s", url[:15])
 
-    subprocess.Popen(["xdg-open", url])
+        subprocess.Popen(["xdg-open", url])
 
-    poll_session(local_path, remote_path)
+        poll_session(local_path, remote_path, stop)
+    finally:
+        log.info("Ensuring clean syncronization...wait")
+        time.sleep(4)
+        final_pull(local_path, remote_path)
 
 
 def file_hash(path):
     return rclone.run("hashsum", "quickxor", str(path)).stdout.split()[0]
 
 
-def poll_session(local_path: Path, remote_path: str, idle_timeout=1800) -> None:
+def poll_session(
+    local_path: Path, remote_path: str, stop: threading.Event, idle_timeout=1800
+) -> None:
     previous_remote_hash, debounce_count = None, 0
     last_activity = time.monotonic()
 
-    def handle_signal(signum, frame):
-        raise KeyboardInterrupt
+    while not stop.is_set():
+        session = state.get_session(str(local_path))
 
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
+        if session is None or time.monotonic() - last_activity > idle_timeout:
+            return
 
-    try:
-        while True:
-            session = state.get_session(str(local_path))
+        try:
+            local_hash = file_hash(local_path)
+            remote_hash, _ = get_remote_metadata(remote_path)
+        except Exception:
+            # time.sleep(POLL_INTERVAL)
+            stop.wait(POLL_INTERVAL)
+            continue
 
-            if session is None or time.monotonic() - last_activity > idle_timeout:
-                return
+        base_local_hash, base_remomte_hash = (
+            session["base_local_hash"],
+            session["base_remote_hash"],
+        )
 
-            try:
-                local_hash = file_hash(local_path)
-                remote_hash, _ = get_remote_metadata(remote_path)
-            except Exception:
-                time.sleep(POLL_INTERVAL)
-                continue
+        if remote_hash == base_remomte_hash:
+            previous_remote_hash, debounce_count = None, 0
+        else:  # remote != base
+            if remote_hash == previous_remote_hash:  # remote changed once (== prev)
+                debounce_count += 1
+            else:  # remote changed multiple times (!= prev)
+                previous_remote_hash, debounce_count = remote_hash, 1
 
-            base_local_hash, base_remomte_hash = (
-                session["base_local_hash"],
-                session["base_remote_hash"],
-            )
+            if debounce_count >= 2:  # remote is stable (didnt change in >=2 polls)
+                if local_hash != base_local_hash:
+                    conflict = local_path.with_name(
+                        f"{local_path.stem}.conflict{local_path.suffix}"
+                    )
+                    rclone.run("copyto", remote_path, str(conflict))
+                    state.update_baseline(str(local_path), base_local_hash, remote_hash)
 
-            if remote_hash == base_remomte_hash:
+                else:  # remote changed yet local remains same as base
+                    log.info("remote changed and is stable, syncing to local")
+                    tmp = local_path.with_name(local_path.name + ".tmp")
+                    rclone.run("copyto", remote_path, str(tmp))
+                    os.replace(tmp, local_path)
+                    state.update_baseline(
+                        str(local_path), file_hash(local_path), remote_hash
+                    )
+
                 previous_remote_hash, debounce_count = None, 0
-            else:  # remote != base
-                print()
-                if remote_hash == previous_remote_hash:  # remote changed once (== prev)
-                    debounce_count += 1
-                else:  # remote changed multiple times (!= prev)
-                    previous_remote_hash, debounce_count = remote_hash, 1
-
-                if debounce_count >= 2:  # remote is stable (didnt change in >=2 polls)
-                    if local_hash != base_local_hash:
-                        conflict = local_path.with_name(
-                            f"{local_path.stem}.conflict{local_path.suffix}"
-                        )
-                        rclone.run("copyto", remote_path, str(conflict))
-                        state.update_baseline(
-                            str(local_path), base_local_hash, remote_hash
-                        )
-
-                    else:  # remote changed yet local remains same as base
-                        print("remote changed and is stable, syncing to local")
-                        tmp = local_path.with_name(local_path.name + ".tmp")
-                        rclone.run("copyto", remote_path, str(tmp))
-                        os.replace(tmp, local_path)
-                        state.update_baseline(
-                            str(local_path), file_hash(local_path), remote_hash
-                        )
-
-                    previous_remote_hash, debounce_count = None, 0
-                    last_activity = time.monotonic()
-            time.sleep(POLL_INTERVAL)
-    finally:
-        print("\nEnsuring clean syncronization...wait")
-        time.sleep(4)
-        final_pull(local_path, remote_path)
+                last_activity = time.monotonic()
+        # time.sleep(POLL_INTERVAL)
+        stop.wait(POLL_INTERVAL)
 
 
 def final_pull(local_path: str, remote_path: str):
@@ -129,10 +128,10 @@ def final_pull(local_path: str, remote_path: str):
 
         if remote_hash == base_remote_hash:
             return
-        print("remote changes found, syncronizing...")
+        log.info("remote changes found, syncronizing...")
         tmp = local_path.with_name(local_path.name + ".tmp")
         rclone.run("copyto", remote_path, str(tmp))
         os.replace(tmp, local_path)
         state.update_baseline(str(local_path), file_hash(local_path), remote_hash)
     except Exception as e:
-        print(f"Final sync failed: {e}")
+        log.info(f"Final sync failed: {e}")
