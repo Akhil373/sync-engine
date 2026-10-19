@@ -1,10 +1,11 @@
 import threading
+import time
 from pathlib import Path
 
 from . import rclone, state
 from .auth import ensure_authenticated
 from .logger_config import get_logger
-from .session import open_file
+from .session import get_remote_metadata, open_file
 
 log = get_logger(__name__)
 
@@ -17,6 +18,7 @@ def init():
     if not state.get_db_path().exists():
         state.init_db()
     ensure_authenticated()
+
 
 def _run(file: Path, stop: threading.Event):
     try:
@@ -32,6 +34,7 @@ def _run(file: Path, stop: threading.Event):
             sessions.pop(str(file), None)
         log.info("Session ended: %s", file.name)
 
+
 def start_session(path: Path):
     file = Path(path).resolve()
     key = str(file)
@@ -44,6 +47,7 @@ def start_session(path: Path):
         sessions[key] = {"thread": t, "stop": stop}
     t.start()
     return stop
+
 
 def stop_all():
     with _lock:
@@ -62,3 +66,30 @@ def join_all(timeout: float | None = None):
         if deadline is not None and time.monotonic() > deadline:
             return
         alive[0].join(0.5)
+
+
+def cleanup_old_files(days: int = 14) -> int:
+    removed = 0
+    for row in state.get_stale_files(days):
+        key = row["local_path"]
+        if key in sessions:
+            continue
+        try:
+            if not Path(key).exists():
+                continue
+            remote_hash, _ = get_remote_metadata(row["remote_path"])
+            if remote_hash is None:
+                state.mark_cleaned(key)
+            elif remote_hash == row["base_remote_hash"]:
+                if key in sessions:
+                    continue
+                rclone.delete_file(row["remote_path"])
+                state.mark_cleaned(key)
+                removed += 1
+            else:
+                log.info("Keeping %s: remote has unsynced changes", row["remote_path"])
+        except Exception:
+            log.exception("cleanup failed for %s", key)
+    if removed:
+        log.info("Cleaned %d old remote file(s)", removed)
+    return removed

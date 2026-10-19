@@ -1,14 +1,13 @@
-from pathlib import Path
 import json
-import threading
 import os
-import signal
-import time
-from . import rclone, state
 import subprocess
-from .logger_config import get_logger
+import threading
+import time
+from pathlib import Path
 
-POLL_INTERVAL = 5
+from . import rclone, state
+from .config import IDLE_TIMEOUT, POLL_INTERVAL
+from .logger_config import get_logger
 
 log = get_logger(__name__)
 
@@ -64,7 +63,9 @@ def file_hash(path):
 
 
 def poll_session(
-    local_path: Path, remote_path: str, stop: threading.Event, idle_timeout=7200
+    local_path: Path,
+    remote_path: str,
+    stop: threading.Event,
 ) -> None:
     previous_remote_hash, debounce_count = None, 0
     last_activity = time.monotonic()
@@ -72,7 +73,7 @@ def poll_session(
     while not stop.is_set():
         session = state.get_session(str(local_path))
 
-        if session is None or time.monotonic() - last_activity > idle_timeout:
+        if session is None or time.monotonic() - last_activity > IDLE_TIMEOUT:
             return
 
         try:
@@ -128,12 +129,12 @@ def final_pull(local_path: str, remote_path: str):
         base_remote_hash = session["base_remote_hash"]
         remote_hash, _ = get_remote_metadata(remote_path)
 
-        if remote_hash == base_remote_hash:
-            return
-        log.info("remote changes found, syncronizing...")
-        tmp = local_path.with_name(local_path.name + ".tmp")
-        rclone.run("copyto", remote_path, str(tmp))
-        os.replace(tmp, local_path)
-        state.update_baseline(str(local_path), file_hash(local_path), remote_hash)
+        if remote_hash != base_remote_hash:
+            log.info("remote changes found, syncronizing...")
+            tmp = local_path.with_name(local_path.name + ".tmp")
+            rclone.run("copyto", remote_path, str(tmp))
+            os.replace(tmp, local_path)
+            state.update_baseline(str(local_path), file_hash(local_path), remote_hash)
+        state.mark_inactive(str(local_path))
     except Exception as e:
         log.info(f"Final sync failed: {e}")

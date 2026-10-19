@@ -3,6 +3,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 from collections import deque
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import manager
+from .config import STALE_FILES_EXPIRY
 
 # from .logging_setup import setup_logging
 
@@ -380,4 +382,10 @@ def main() -> None:
 
     window.show()
     window.add_files(args.files)
+
+    # clean up stale files from remote
+    threading.Thread(
+        target=manager.cleanup_old_files, args=(STALE_FILES_EXPIRY,), daemon=True
+    ).start()
+
     sys.exit(app.exec())

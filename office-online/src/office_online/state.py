@@ -1,6 +1,7 @@
-from pathlib import Path
-from datetime import datetime, timezone
 import sqlite3
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 
 def get_db_path() -> Path:
@@ -24,6 +25,7 @@ def init_db() -> None:
     conn = get_connection()
 
     try:
+        # state -> active, inactive, cleaned
         conn.execute("""
             CREATE TABLE IF NOT EXISTS files (
                 id INTEGER PRIMARY KEY,
@@ -117,6 +119,37 @@ def update_baseline(
         conn.commit()
     finally:
         close_connection(conn)
+
+
+def get_stale_files(days: int) -> list[sqlite3.Row]:
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    with closing(get_connection()) as conn:
+        return conn.execute(
+            "SELECT * FROM files WHERE state != 'cleaned' AND state != 'active' AND updated_at < ?",
+            (cutoff,),
+        ).fetchall()
+
+
+def mark_cleaned(local_path: str) -> None:
+    with (
+        closing(get_connection()) as conn,
+        conn,
+    ):
+        conn.execute(
+            "UPDATE files SET state = 'cleaned', updated_at = ? WHERE local_path = ?",
+            (datetime.now(timezone.utc).isoformat(), local_path),
+        )
+
+
+def mark_inactive(local_path: str) -> None:
+    with (
+        closing(get_connection()) as conn,
+        conn,
+    ):
+        conn.execute(
+            "UPDATE files SET state = 'inactive', updated_at = ? WHERE local_path = ?",
+            (datetime.now(timezone.utc).isoformat(), local_path),
+        )
 
 
 def get_session(local_path: str):

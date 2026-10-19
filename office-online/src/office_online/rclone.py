@@ -1,5 +1,5 @@
-import subprocess
 import shutil
+import subprocess
 
 
 def is_installed() -> bool:
@@ -42,3 +42,7 @@ def get_edit_url(remote_path: str) -> str:
     )
 
     return result.stdout.strip()
+
+
+def delete_file(remote_path: str) -> None:
+    run("deletefile", remote_path)
