@@ -1,10 +1,10 @@
 import argparse
 import signal
-from pathlib import Path
-from .config import STALE_FILES_EXPIRY
 import threading
+from pathlib import Path
 
 from . import manager
+from .config import STALE_FILES_EXPIRY
 
 
 def main() -> None:
