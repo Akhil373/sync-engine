@@ -51,6 +51,7 @@ OFFICE_SUFFIXES = {
 }
 MAX_LINES = 1000
 SERVER_NAME = f"office-online-gui-{os.getuid()}"
+APP_LOG = "__app__"
 
 
 class Bus(QObject):
@@ -83,6 +84,11 @@ class MainWindow(QMainWindow):
         self.list = QListWidget()
         self.list.currentItemChanged.connect(self._on_select)
         self.list.itemDoubleClicked.connect(lambda _: self._toggle_selected())
+
+        item = QListWidgetItem("Activity")
+        item.setData(Qt.UserRole, APP_LOG)
+        self.entries[APP_LOG] = {"item": item, "lines": deque(maxlen=MAX_LINES), "name": "Activity"}
+        self.list.addItem(item)
 
         hint = QLabel("Drop files here")
         hint.setAlignment(Qt.AlignCenter)
@@ -233,7 +239,8 @@ class MainWindow(QMainWindow):
         self._refresh()
 
     def _on_log(self, key: str, line: str) -> None:
-        entry = self.entries.get(key)
+        entry = self.entries.get(key) or self.entries[APP_LOG]
+        key = key if key in self.entries else APP_LOG
         if entry is None:
             return
         entry["lines"].append(line)
@@ -384,8 +391,7 @@ def main() -> None:
     window.add_files(args.files)
 
     # clean up stale files from remote
-    threading.Thread(
-        target=manager.cleanup_old_files, args=(STALE_FILES_EXPIRY,), daemon=True
-    ).start()
+    threading.Thread(target=manager.cleanup_old_files, args=(STALE_FILES_EXPIRY,),
+                     daemon=True, name="cleanup").start()
 
     sys.exit(app.exec())

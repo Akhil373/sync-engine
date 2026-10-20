@@ -4,7 +4,6 @@ from pathlib import Path
 
 from . import rclone, state
 from .auth import ensure_authenticated
-from .config import STALE_FILES_EXPIRY
 from .logger_config import get_logger
 from .session import get_remote_metadata, open_file
 
@@ -70,7 +69,7 @@ def join_all(timeout: float | None = None):
 
 
 def cleanup_old_files(days: int = 14) -> int:
-    log.info(f"checking for files older than {STALE_FILES_EXPIRY} in remote...")
+    log.info(f"checking for files older than {days} days in remote...")
     removed = 0
     for row in state.get_stale_files(days):
         key = row["local_path"]
